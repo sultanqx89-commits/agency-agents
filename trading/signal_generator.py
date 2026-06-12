@@ -35,6 +35,12 @@ SYMBOLS = [
     'ETH-USD',   # Ethereum
 ]
 
+# Binary Options Configuration (5 minutes)
+BINARY_OPTIONS_CONFIG = {
+    'expiration_time_minutes': 5,  # 5 minute binary options
+    'buffer_seconds': 10,          # Buffer for order placement
+}
+
 # Magnus Pro style configuration
 MAGNUS_CONFIG = {
     'rsi_period': 14,
@@ -46,6 +52,53 @@ MAGNUS_CONFIG = {
     'bb_period': 20,
     'bb_std_dev': 2,
 }
+
+
+class BinaryOptionsTimer:
+    """Calculate Entry and Expiration times for binary options"""
+    
+    @staticmethod
+    def get_current_candle_time() -> Tuple[datetime, datetime]:
+        """Get current 5-minute candle start and end time"""
+        now = datetime.now()
+        
+        # Get the start of current 5-minute candle
+        minute = now.minute
+        candle_minute = (minute // 5) * 5
+        candle_start = now.replace(minute=candle_minute, second=0, microsecond=0)
+        
+        # Calculate candle end
+        candle_end = candle_start + timedelta(minutes=5)
+        
+        return candle_start, candle_end
+    
+    @staticmethod
+    def calculate_entry_expire_times() -> Dict:
+        """Calculate Entry and Expiration times"""
+        now = datetime.now()
+        candle_start, candle_end = BinaryOptionsTimer.get_current_candle_time()
+        
+        # Entry time is the signal generation time
+        entry_time = now
+        
+        # For 5-minute binary options
+        expiration_time = candle_end + timedelta(
+            seconds=BINARY_OPTIONS_CONFIG['buffer_seconds']
+        )
+        
+        # Calculate duration
+        duration = (expiration_time - entry_time).total_seconds()
+        
+        return {
+            'entry_time': entry_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'entry_time_unix': int(entry_time.timestamp()),
+            'expiration_time': expiration_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'expiration_time_unix': int(expiration_time.timestamp()),
+            'duration_seconds': int(duration),
+            'duration_minutes': round(duration / 60, 1),
+            'candle_start': candle_start.strftime('%Y-%m-%d %H:%M:%S'),
+            'candle_end': candle_end.strftime('%Y-%m-%d %H:%M:%S'),
+        }
 
 
 class MagnusProAnalyzer:
@@ -187,6 +240,9 @@ class MagnusProAnalyzer:
         else:
             final_signal = 'HOLD'
         
+        # Get binary options timing
+        timing = BinaryOptionsTimer.calculate_entry_expire_times()
+        
         return {
             'symbol': self.symbol,
             'price': round(current_price, 4),
@@ -195,7 +251,15 @@ class MagnusProAnalyzer:
             'rsi': round(current_rsi, 2) if current_rsi is not None else None,
             'macd': round(current_macd, 4) if current_macd is not None else None,
             'signals': signals,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'entry_time': timing['entry_time'],
+            'entry_time_unix': timing['entry_time_unix'],
+            'expiration_time': timing['expiration_time'],
+            'expiration_time_unix': timing['expiration_time_unix'],
+            'duration_seconds': timing['duration_seconds'],
+            'duration_minutes': timing['duration_minutes'],
+            'candle_start': timing['candle_start'],
+            'candle_end': timing['candle_end'],
         }
 
 
@@ -223,43 +287,56 @@ async def send_telegram_message(message: str) -> bool:
 
 
 def format_signal_message(analysis_results: List[Dict]) -> str:
-    """Format analysis results for Telegram"""
+    """Format analysis results for Telegram with Entry and Expiration times"""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    message = f"<b>🤖 Trading Signals - {timestamp}</b>\n"
-    message += "=" * 40 + "\n\n"
+    message = f"<b>🤖 Binary Trading Signals - {timestamp}</b>\n"
+    message += "=" * 50 + "\n\n"
     
     buy_signals = [r for r in analysis_results if r['signal'] == 'BUY']
     sell_signals = [r for r in analysis_results if r['signal'] == 'SELL']
     hold_signals = [r for r in analysis_results if r['signal'] == 'HOLD']
     
     if buy_signals:
-        message += "<b>🟢 BUY SIGNALS:</b>\n"
+        message += "<b>🟢 BUY SIGNALS (CALL):</b>\n"
+        message += "-" * 50 + "\n"
         for signal in buy_signals:
-            message += f"  • {signal['symbol']}\n"
-            message += f"    Price: {signal['price']}\n"
-            message += f"    Confidence: {signal['confidence']}%\n"
-            message += f"    RSI: {signal['rsi']}\n\n"
+            message += f"<b>📊 {signal['symbol']}</b>\n"
+            message += f"  💰 Price: {signal['price']}\n"
+            message += f"  📈 RSI: {signal['rsi']}\n"
+            message += f"  🎯 Confidence: {signal['confidence']}%\n"
+            message += f"  ⏰ Entry Time: <code>{signal['entry_time']}</code>\n"
+            message += f"  ⏱️  Expire Time: <code>{signal['expiration_time']}</code>\n"
+            message += f"  ⌛ Duration: <b>{signal['duration_minutes']} min</b>\n"
+            message += f"  📍 Candle: {signal['candle_start']} → {signal['candle_end']}\n\n"
     
     if sell_signals:
-        message += "<b>🔴 SELL SIGNALS:</b>\n"
+        message += "<b>🔴 SELL SIGNALS (PUT):</b>\n"
+        message += "-" * 50 + "\n"
         for signal in sell_signals:
-            message += f"  • {signal['symbol']}\n"
-            message += f"    Price: {signal['price']}\n"
-            message += f"    Confidence: {signal['confidence']}%\n"
-            message += f"    RSI: {signal['rsi']}\n\n"
+            message += f"<b>📊 {signal['symbol']}</b>\n"
+            message += f"  💰 Price: {signal['price']}\n"
+            message += f"  📉 RSI: {signal['rsi']}\n"
+            message += f"  🎯 Confidence: {signal['confidence']}%\n"
+            message += f"  ⏰ Entry Time: <code>{signal['entry_time']}</code>\n"
+            message += f"  ⏱️  Expire Time: <code>{signal['expiration_time']}</code>\n"
+            message += f"  ⌛ Duration: <b>{signal['duration_minutes']} min</b>\n"
+            message += f"  📍 Candle: {signal['candle_start']} → {signal['candle_end']}\n\n"
     
     if hold_signals:
         message += "<b>⚪ HOLD:</b>\n"
+        message += "-" * 50 + "\n"
         for signal in hold_signals:
             message += f"  • {signal['symbol']} (Confidence: {signal['confidence']}%)\n"
+    
+    message += "\n<i>⚠️ This is for educational purposes only. Trade at your own risk.</i>\n"
     
     return message
 
 
 async def main():
     """Main execution"""
-    logger.info("Starting trading signal generation...")
+    logger.info("Starting trading signal generation with binary options timing...")
     
     try:
         results = []
@@ -270,6 +347,7 @@ async def main():
             signal = analyzer.generate_signal()
             results.append(signal)
             logger.info(f"{symbol}: {signal['signal']} (Confidence: {signal['confidence']}%)")
+            logger.info(f"Entry: {signal['entry_time']} → Expire: {signal['expiration_time']}")
         
         # Filter strong signals only
         strong_signals = [r for r in results if r['confidence'] >= 50 and r['signal'] != 'HOLD']
@@ -290,7 +368,7 @@ async def main():
         
     except Exception as e:
         logger.error(f"Error in main execution: {str(e)}")
-        error_message = f"<b>⚠️ Trading Bot Error</b>\n{str(e)}"
+        error_message = f"<b>⚠️ Trading Bot Error</b>\n<code>{str(e)}</code>"
         await send_telegram_message(error_message)
         return False
 
